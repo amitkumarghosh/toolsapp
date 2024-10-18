@@ -129,6 +129,7 @@ def save_image(image, code, punch_type):
     current_date = datetime.now().strftime("%d-%m-%Y")
     image_name = f"{code}_{current_date}_{punch_type}.jpg"
     image_path = os.path.join("Images", image_name)
+    # image_path = os.path.join(image_name)
 
     # Save image as JPEG with max size of 50KB
     image_pil = Image.open(io.BytesIO(image))
@@ -148,23 +149,6 @@ def save_image(image, code, punch_type):
 
     return image_path
 
-
-
-# Function to capture image from webcam and convert to binary
-def capture_photo():
-    camera = cv2.VideoCapture(0)
-    ret, frame = camera.read()
-    if not ret:
-        st.error("Failed to capture image")
-        return None
-    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    camera.release()
-
-    # Convert image to binary
-    img_pil = Image.fromarray(img_rgb)
-    img_byte_arr = io.BytesIO()
-    img_pil.save(img_byte_arr, format='JPEG')
-    return img_byte_arr.getvalue()
 
 # Function to calculate shift duration
 def calculate_shift_duration(in_time, out_time):
@@ -221,6 +205,19 @@ def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time,
 def main():
     st.markdown('### Dhuwalia Site and Attendance Management System')
 
+    # Add CSS to reduce the camera frame size
+    st.markdown(
+        """
+        <style>
+        .stCamera {
+            max-width: 500px;  /* Set the desired width */
+            margin: auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     # Create tables if they don't exist
     create_tables()
 
@@ -265,22 +262,32 @@ def main():
 
             # In time photo and capture
             if not has_in_time_recorded_today(user_data['code']):
-                if st.button("Start Shift (In Time)"):
-                    in_time = datetime.now().strftime("%I.%M.%S %p")
-                    in_photo = capture_photo()
 
-                    if in_photo:
+                # Add CSS to reduce the camera frame size
+
+
+                in_photo = st.camera_input("Start Shift (In Time)")
+                if in_photo:
+                    in_time = datetime.now().strftime("%I.%M.%S %p")
+
+                    # Read the image data from the uploaded file
+                    in_photo_bytes = in_photo.read()
+
+                    if in_photo_bytes:
                         supervisor_name = fetch_supervisor_name(user_data['code'])
-                        in_photo_link = save_image(in_photo, user_data['code'], "in")
+                        in_photo_link = save_image(in_photo_bytes, user_data['code'], "in")
                         insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, in_photo_link, None, None, supervisor_name, None)
                         st.success("In Time and photo captured successfully!")
             else:
                 st.warning("You have already recorded your In Time for today!")
 
             # Out time photo and capture
-            if st.button("End Shift (Out Time)"):
+            out_photo = st.camera_input("End Shift (Out Time)")
+            if out_photo:
                 out_time = datetime.now().strftime("%I.%M.%S %p")
-                out_photo = capture_photo()
+
+                # Read the image data from the uploaded file
+                out_photo_bytes = out_photo.read()
 
                 # Fetch in_time to calculate shift duration
                 conn = sqlite3.connect('Tools_And_Tools.sqlite')
@@ -289,12 +296,12 @@ def main():
                 in_time = c.fetchone()[0]
                 conn.close()
 
-                if out_photo and in_time:
+                if out_photo_bytes and in_time:
                     shift_duration = calculate_shift_duration(in_time, out_time)
-                    out_photo_link = save_image(out_photo, user_data['code'], "out")
+                    out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
                     insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, out_photo_link, None, shift_duration)
                     st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
-        
+
         elif user_data['role'] == 'Super Admin':
             manage_super_admin_data()
         elif user_data['role'] == 'Supervisor':
@@ -302,6 +309,8 @@ def main():
         
         else:
             st.error("Unauthorized user role for attendance capture!")
+
+                    
 
 # Function to download the Image folder
 def download_image_folder():
