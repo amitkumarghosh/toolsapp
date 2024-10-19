@@ -250,58 +250,7 @@ def main():
     if st.session_state.logged_in:
         user_data = st.session_state.user_data
         if user_data['role'] == 'Technician':
-            st.success(f"Welcome {user_data['name']}, please mark your attendance.")
-
-            # Display workstation dropdown
-            workstations = fetch_workstations()
-            selected_workstation = st.selectbox("Select Workstation", workstations)
-
-            # Show attendance date (Indian timezone)
-            attendance_date = datetime.now().strftime("%d-%m-%Y")
-            st.write(f"Attendance Date: {attendance_date}")
-
-            # In time photo and capture
-            if not has_in_time_recorded_today(user_data['code']):
-
-                # Add CSS to reduce the camera frame size
-
-
-                in_photo = st.camera_input("Start Shift (In Time)")
-                if in_photo:
-                    in_time = datetime.now().strftime("%I.%M.%S %p")
-
-                    # Read the image data from the uploaded file
-                    in_photo_bytes = in_photo.read()
-
-                    if in_photo_bytes:
-                        supervisor_name = fetch_supervisor_name(user_data['code'])
-                        in_photo_link = save_image(in_photo_bytes, user_data['code'], "in")
-                        insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, in_photo_link, None, None, supervisor_name, None)
-                        st.success("In Time and photo captured successfully!")
-            else:
-                st.warning("You have already recorded your In Time for today!")
-
-            # Out time photo and capture
-            out_photo = st.camera_input("End Shift (Out Time)")
-            if out_photo:
-                out_time = datetime.now().strftime("%I.%M.%S %p")
-
-                # Read the image data from the uploaded file
-                out_photo_bytes = out_photo.read()
-
-                # Fetch in_time to calculate shift duration
-                conn = sqlite3.connect('Tools_And_Tools.sqlite')
-                c = conn.cursor()
-                c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (user_data['code'], attendance_date))
-                in_time = c.fetchone()[0]
-                conn.close()
-
-                if out_photo_bytes and in_time:
-                    shift_duration = calculate_shift_duration(in_time, out_time)
-                    out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
-                    insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, out_photo_link, None, shift_duration)
-                    st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
-
+            technician_data()            
         elif user_data['role'] == 'Super Admin':
             manage_super_admin_data()
         elif user_data['role'] == 'Supervisor':
@@ -310,7 +259,61 @@ def main():
         else:
             st.error("Unauthorized user role for attendance capture!")
 
-                    
+def technician_data():
+
+    user_data = st.session_state.user_data
+    st.success(f"Welcome {user_data['name']}, please mark your attendance.")
+
+            # Display workstation dropdown
+    workstations = fetch_workstations()
+    selected_workstation = st.selectbox("Select Workstation", workstations)
+
+    # Show attendance date (Indian timezone)
+    attendance_date = datetime.now().strftime("%d-%m-%Y")
+    st.write(f"Attendance Date: {attendance_date}")
+
+    # In time photo and capture
+    if not has_in_time_recorded_today(user_data['code']):
+
+        # Add CSS to reduce the camera frame size
+
+
+        in_photo = st.camera_input("Start Shift (In Time)")
+        if in_photo:
+            in_time = datetime.now().strftime("%I.%M.%S %p")
+
+            # Read the image data from the uploaded file
+            in_photo_bytes = in_photo.read()
+
+            if in_photo_bytes:
+                supervisor_name = fetch_supervisor_name(user_data['code'])
+                in_photo_link = save_image(in_photo_bytes, user_data['code'], "in")
+                insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, in_photo_link, None, None, supervisor_name, None)
+                st.success("In Time and photo captured successfully!")
+    else:
+        st.warning("You have already recorded your In Time for today!")
+
+    # Out time photo and capture
+    out_photo = st.camera_input("End Shift (Out Time)")
+    if out_photo:
+        out_time = datetime.now().strftime("%I.%M.%S %p")
+
+        # Read the image data from the uploaded file
+        out_photo_bytes = out_photo.read()
+
+        # Fetch in_time to calculate shift duration
+        conn = sqlite3.connect('Tools_And_Tools.sqlite')
+        c = conn.cursor()
+        c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (user_data['code'], attendance_date))
+        in_time = c.fetchone()[0]
+        conn.close()
+
+        if out_photo_bytes and in_time:
+            shift_duration = calculate_shift_duration(in_time, out_time)
+            out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
+            insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, out_photo_link, None, shift_duration)
+            st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
+                   
 
 # Function to download the Image folder
 def download_image_folder():
@@ -667,7 +670,6 @@ def generate_sv_attendance_report(start_date, end_date, sname):
     output.seek(0)
 
     st.download_button(label="Download Attendance Report", data=output, file_name="Attendance_Report.xlsx", mime="application/vnd.ms-excel")
-
 
 
 #=================================================================
