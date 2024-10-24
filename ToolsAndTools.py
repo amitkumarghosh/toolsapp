@@ -121,6 +121,27 @@ in_time = get_ist_time()
 out_time = get_ist_time()
 
 
+# Function to capture in time
+def capture_in_time(user_data, selected_workstation, photo_link):
+    in_time = get_ist_time()
+    st.session_state['in_time'] = in_time
+    # Insert into your attendance table (assuming insert_attendance is defined elsewhere)
+    insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, photo_link, None, None, None)
+    st.success(f"In Time captured successfully! {in_time}")
+
+# Function to capture out time
+def capture_out_time(user_data, selected_workstation, photo_link):
+    out_time = get_ist_time()
+    in_time = st.session_state.get('in_time')
+    if not in_time:
+        st.error("In Time is not captured yet!")
+        return
+    
+    # Calculate shift duration
+    shift_duration = calculate_shift_duration(in_time, out_time)  # assuming this function is defined elsewhere
+    insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, photo_link, None, shift_duration)
+    st.success(f"Out Time captured successfully! Shift duration: {shift_duration}")
+
 # Function to check if In Time has already been recorded for the day
 def has_in_time_recorded_today(code):
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
@@ -164,12 +185,15 @@ def save_image(image, code, punch_type):
     return image_path
 
 
-# Function to calculate shift duration
-def calculate_shift_duration(in_time, out_time):
-    in_time_obj = datetime.strptime(in_time, "%I.%M.%S %p")
-    out_time_obj = datetime.strptime(out_time, "%I.%M.%S %p")
-    shift_duration = out_time_obj - in_time_obj
-    return str(shift_duration)
+# Example function to calculate shift duration
+def calculate_shift_duration(in_time_str, out_time_str):
+    # Convert string time to datetime objects using the correct format for 12-hour time with AM/PM
+    in_time = datetime.strptime(in_time_str, '%I.%M.%S %p')  # Adjusting for format like '08.32.09 PM'
+    out_time = datetime.strptime(out_time_str, '%I.%M.%S %p')
+    
+    # Calculate the difference
+    shift_duration = out_time - in_time
+    return shift_duration
 
 # Fetch supervisor name for the logged-in user based on Supervisor_Code
 def fetch_supervisor_name(code):
@@ -188,6 +212,7 @@ def fetch_supervisor_name(code):
     return supervisor_name
 
 
+
 # Insert attendance data into the table
 def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time, out_photo_link, supervisor_name, shift_duration):
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
@@ -198,12 +223,18 @@ def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time,
     c.execute('SELECT * FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (code, today_date))
     existing_entry = c.fetchone()
 
+    # Convert shift_duration (timedelta) to a string in "HH:MM:SS" format if it's not None
+    if shift_duration is not None:
+        shift_duration_str = str(shift_duration)  # Convert timedelta to string "HH:MM:SS"
+    else:
+        shift_duration_str = None
+
     if existing_entry:
         # Update Out_Time, Out_Time_Photo_Link, and Shift_Duration
         c.execute('''UPDATE Attendance 
                      SET Out_Time = ?, Out_Time_Photo_Link = ?, Shift_Duration = ? 
                      WHERE Code = ? AND Attendance_Date = ?''',
-                  (out_time, out_photo_link, shift_duration, code, today_date))
+                  (out_time, out_photo_link, shift_duration_str, code, today_date))
     else:
         # Insert new attendance entry
         supervisor_name = fetch_supervisor_name(code)
@@ -213,6 +244,7 @@ def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time,
 
     conn.commit()
     conn.close()
+
 
 
 # Main attendance capturing logic with updated button visibility for In Time
@@ -272,13 +304,12 @@ def main():
         
         else:
             st.error("Unauthorized user role for attendance capture!")
-
 def technician_data():
-
     user_data = st.session_state.user_data
     st.success(f"Welcome {user_data['name']}, please mark your attendance.")
 
-            # Display workstation dropdown
+    global in_time
+    # Display workstation dropdown
     workstations = fetch_workstations()
     selected_workstation = st.selectbox("Select Workstation", workstations)
 
@@ -288,10 +319,6 @@ def technician_data():
 
     # In time photo and capture
     if not has_in_time_recorded_today(user_data['code']):
-
-        # Add CSS to reduce the camera frame size
-
-
         in_photo = st.camera_input("Start Shift (In Time)")
         if in_photo:
             in_time = datetime.now().strftime("%I.%M.%S %p")
@@ -306,6 +333,7 @@ def technician_data():
                 st.success("In Time and photo captured successfully!")
     else:
         st.warning("You have already recorded your In Time for today!")
+        st.success(f"In Time found: {in_time}")
 
     # Out time photo and capture
     out_photo = st.camera_input("End Shift (Out Time)")
@@ -319,14 +347,25 @@ def technician_data():
         conn = sqlite3.connect('Tools_And_Tools.sqlite')
         c = conn.cursor()
         c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (user_data['code'], attendance_date))
-        in_time = c.fetchone()[0]
+        in_time_result = c.fetchone()  # Fetch the result
+
+        if in_time_result:
+            in_time = in_time_result[0]  # Extract the In_Time value from the tuple
+            # st.success(f"In Time found: {in_time}")
+        else:
+            # If no record is found, handle the error appropriately
+            st.error("No in_time found for the given code and date")
+            conn.close()  # Close the connection
+            return  # Stop further execution
+
         conn.close()
 
         if out_photo_bytes and in_time:
-            shift_duration = calculate_shift_duration(in_time, out_time)
+            shift_duration = calculate_shift_duration(in_time, out_time)  # Pass in_time as a string
             out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
             insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, out_photo_link, None, shift_duration)
             st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
+
                    
 
 # Function to download the Image folder
