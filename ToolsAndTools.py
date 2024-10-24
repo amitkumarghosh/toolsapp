@@ -10,6 +10,7 @@ import io
 import pandas as pd
 import openpyxl
 import zipfile
+import pytz
 
 # Create SQLite Tables
 def create_tables():
@@ -106,6 +107,19 @@ def manage_folder_size(max_folder_size=50 * 1024 * 1024):
         oldest_file, oldest_file_size = files.pop(0)
         os.remove(oldest_file)
         total_size -= oldest_file_size
+
+
+def get_ist_time():
+    # Define the IST timezone
+    ist = pytz.timezone('Asia/Kolkata')
+    # Get the current time in UTC and convert to IST
+    ist_time = datetime.now(ist)
+    return ist_time.strftime('%Y-%m-%d %H:%M:%S')
+
+# Example usage while capturing in/out time
+in_time = get_ist_time()
+out_time = get_ist_time()
+
 
 # Function to check if In Time has already been recorded for the day
 def has_in_time_recorded_today(code):
