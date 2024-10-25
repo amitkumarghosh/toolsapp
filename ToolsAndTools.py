@@ -146,9 +146,9 @@ def capture_out_time(user_data, selected_workstation, photo_link):
 def has_in_time_recorded_today(code):
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
     c = conn.cursor()
-
+    ist = pytz.timezone('Asia/Kolkata')
     # Check if the current date's attendance for this user already exists
-    today_date = datetime.now().strftime("%d-%m-%Y")
+    today_date = datetime.now(ist).strftime("%d-%m-%Y")
     c.execute('SELECT * FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (code, today_date))
     existing_entry = c.fetchone()
 
@@ -159,9 +159,9 @@ def has_in_time_recorded_today(code):
 def save_image(image, code, punch_type):
     ensure_images_folder()
     manage_folder_size()
-
+    ist = pytz.timezone('Asia/Kolkata')
     # Create image name with format: "id_date_punchtype"
-    current_date = datetime.now().strftime("%d-%m-%Y")
+    current_date = datetime.now(ist).strftime("%d-%m-%Y")
     image_name = f"{code}_{current_date}_{punch_type}.jpg"
     image_path = os.path.join("Images", image_name)
     # image_path = os.path.join(image_name)
@@ -218,8 +218,9 @@ def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time,
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
     c = conn.cursor()
 
+    ist = pytz.timezone('Asia/Kolkata')
     # Check if the entry for the given date and user already exists
-    today_date = datetime.now().strftime("%d-%m-%Y")
+    today_date = datetime.now(ist).strftime("%d-%m-%Y")
     c.execute('SELECT * FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (code, today_date))
     existing_entry = c.fetchone()
 
@@ -313,15 +314,18 @@ def technician_data():
     workstations = fetch_workstations()
     selected_workstation = st.selectbox("Select Workstation", workstations)
 
+    # Set the timezone to Indian Standard Time (UTC+5:30)
+    ist = pytz.timezone('Asia/Kolkata')
+
     # Show attendance date (Indian timezone)
-    attendance_date = datetime.now().strftime("%d-%m-%Y")
+    attendance_date = datetime.now(ist).strftime("%d-%m-%Y")
     st.write(f"Attendance Date: {attendance_date}")
 
     # In time photo and capture
     if not has_in_time_recorded_today(user_data['code']):
         in_photo = st.camera_input("Start Shift (In Time)")
         if in_photo:
-            in_time = datetime.now().strftime("%I.%M.%S %p")
+            in_time = datetime.now(ist).strftime("%I.%M.%S %p")
 
             # Read the image data from the uploaded file
             in_photo_bytes = in_photo.read()
@@ -338,7 +342,7 @@ def technician_data():
     # Out time photo and capture
     out_photo = st.camera_input("End Shift (Out Time)")
     if out_photo:
-        out_time = datetime.now().strftime("%I.%M.%S %p")
+        out_time = datetime.now(ist).strftime("%I.%M.%S %p")
 
         # Read the image data from the uploaded file
         out_photo_bytes = out_photo.read()
@@ -575,14 +579,15 @@ def mark_attendance():
             workstations = fetch_workstations()
             selected_workstation = st.selectbox("Select Workstation", workstations)
 
+            ist = pytz.timezone('Asia/Kolkata')
             # Show attendance date (Indian timezone)
-            attendance_date = datetime.now().strftime("%d-%m-%Y")
+            attendance_date = datetime.now(ist).strftime("%d-%m-%Y")
             st.write(f"Attendance Date: {attendance_date}")
 
             # In time attendance capture for the technician by Supervisor
             if not has_in_time_recorded_today(selected_technician_code):
                 if st.button("Start Shift (In Time)"):
-                    in_time = datetime.now().strftime("%I.%M.%S %p")
+                    in_time = datetime.now(ist).strftime("%I.%M.%S %p")
 
                     # Fetch the supervisor name
                     supervisor_name = fetch_supervisor_name(user_data['code'])
@@ -598,7 +603,7 @@ def mark_attendance():
 
             # Out time attendance capture for the technician by Supervisor
             if st.button("End Shift (Out Time)"):
-                out_time = datetime.now().strftime("%I.%M.%S %p")
+                out_time = datetime.now(ist).strftime("%I.%M.%S %p")
 
                 # Fetch in_time to calculate shift duration
                 conn = sqlite3.connect('Tools_And_Tools.sqlite')
