@@ -38,7 +38,7 @@ schedule==1.2.2
 secure-smtplib==0.1.1
 six==1.16.0
 smmap==5.0.1
-streamlit==1.36.0
+streamlit==1.39.0
 streamlit-sync==0.1.0
 tenacity==8.2.3
 toml==0.10.2

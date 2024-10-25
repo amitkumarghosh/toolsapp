@@ -308,7 +308,7 @@ def technician_data():
     user_data = st.session_state.user_data
     st.success(f"Welcome {user_data['name']}, please mark your attendance.")
 
-    global in_time
+   
     # Display workstation dropdown
     workstations = fetch_workstations()
     selected_workstation = st.selectbox("Select Workstation", workstations)
@@ -333,7 +333,7 @@ def technician_data():
                 st.success("In Time and photo captured successfully!")
     else:
         st.warning("You have already recorded your In Time for today!")
-        st.success(f"In Time found: {in_time}")
+        
 
     # Out time photo and capture
     out_photo = st.camera_input("End Shift (Out Time)")
@@ -351,7 +351,7 @@ def technician_data():
 
         if in_time_result:
             in_time = in_time_result[0]  # Extract the In_Time value from the tuple
-            # st.success(f"In Time found: {in_time}")
+            st.success(f"In Time found: {in_time}")
         else:
             # If no record is found, handle the error appropriately
             st.error("No in_time found for the given code and date")
