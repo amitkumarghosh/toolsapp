@@ -392,44 +392,61 @@ def download_image_folder():
     st.download_button(label="Download Image Folder", data=zip_data, file_name=zip_filename, mime="application/zip")
 
 # Function to calculate attendance summary with total hours and count of Sundays
+
 def generate_attendance_report(start_date, end_date):
+    # Ensure start_date and end_date are in DD-MM-YYYY format for consistency
+    start_date = datetime.strptime(start_date, '%d-%m-%Y').strftime('%Y-%m-%d')
+    end_date = datetime.strptime(end_date, '%d-%m-%Y').strftime('%Y-%m-%d')
+    
+    # Connect to the SQLite database
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
-    query = '''SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, a.Attendance_Date, a.Shift_Duration
-               FROM Attendance a
-               JOIN User_Credentials u ON a.Code = u.Code
-               JOIN User_Credentials s ON u.Supervisor_Code = s.Code
-               WHERE a.Attendance_Date BETWEEN ? AND ?'''
-
-    df = pd.read_sql_query(query, conn, params=(start_date, end_date))
+    
+    # Fetch attendance data with date filtering and text-to-date conversion in SQL query
+    query = '''
+    SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
+           a.Attendance_Date, a.Shift_Duration
+    FROM Attendance a
+    JOIN User_Credentials u ON a.Code = u.Code
+    JOIN User_Credentials s ON u.Supervisor_Code = s.Code
+    WHERE DATE(substr(a.Attendance_Date, 7, 4) || '-' || substr(a.Attendance_Date, 4, 2) || '-' || substr(a.Attendance_Date, 1, 2))
+          BETWEEN DATE(?) AND DATE(?)
+    '''
+    
+    # Load the query results into a DataFrame, filtered by start_date and end_date
+    df = pd.read_sql_query(query, conn, params=[start_date, end_date])
     conn.close()
-
-    if df.empty:
-        st.warning("No attendance data found for the selected date range.")
-        return
-
-    # Convert 'Attendance_Date' to datetime format and 'Shift_Duration' to timedelta
-    df['Attendance_Date'] = pd.to_datetime(df['Attendance_Date'], format='%d-%m-%Y')
-    df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'])
-
-    # Create a new column to check if the attendance date is a Sunday
-    df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # 6 means Sunday
-
-    # Group by Supervisor and Technician, calculate total days, total hours, and count of Sundays
+    
+    # Display the initial data for verification
+    # Activate to test
+    # st.write("Data from query after date filtering:", df)
+    
+    # Convert Attendance_Date to datetime format to enable additional filtering and calculations
+    df['Attendance_Date'] = pd.to_datetime(df['Attendance_Date'], format='%d-%m-%Y', errors='coerce')
+    df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'], errors='coerce')
+    
+    # Identify Sundays in the attendance data
+    df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # Sunday = 6
+    # Activate to test
+    # st.write("Data with Is_Sunday flag:", df)
+    
+    # Calculate Total_Days, Sundays, and Total_Hours by grouping
     summary = df.groupby(['Supervisor_Name', 'Technician_Name']).agg(
         Total_Days=('Attendance_Date', 'nunique'),
         Total_Hours=('Shift_Duration', 'sum'),
-        Sundays=('Is_Sunday', 'sum')  # Count how many times 'Is_Sunday' is True
+        Sundays=('Is_Sunday', 'sum')
     ).reset_index()
-
+    
     # Convert total hours back to HH:MM:SS format
-    summary['Total_Hours'] = summary['Total_Hours'].dt.components.apply(lambda x: f"{int(x['days'])*24 + int(x['hours']):02}:{int(x['minutes']):02}:{int(x['seconds']):02}", axis=1)
-
-    # Rearranging columns to place 'Sundays' before 'Total_Hours'
-    summary = summary[['Supervisor_Name', 'Technician_Name', 'Total_Days', 'Sundays', 'Total_Hours']]
-
+    summary['Total_Hours'] = summary['Total_Hours'].apply(lambda x: f"{int(x.total_seconds() // 3600):02}:{int((x.total_seconds() % 3600) // 60):02}:{int(x.total_seconds() % 60):02}")
+    
+    # Display the summary results
+    # Activate to test
+    # st.write("Attendance Summary Report:", summary)
+    
+    # Show the data in a Streamlit table format
     st.dataframe(summary)
 
-    # Provide an option to download the report as Excel
+        # Provide an option to download the report as Excel
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary.to_excel(writer, index=False)
@@ -438,7 +455,9 @@ def generate_attendance_report(start_date, end_date):
     st.download_button(label="Download Attendance Report", data=output, file_name="Attendance_Report.xlsx", mime="application/vnd.ms-excel")
 
 
-# Adding the report generation functionality in a new tab
+# # Adding the report generation functionality in a new tab
+
+
 def display_admin_report():
     st.header("Supervisor and Technician-wise Attendance Report")
 
@@ -673,62 +692,72 @@ def fetch_name(code):
 
 
 def generate_sv_attendance_report(start_date, end_date, sname):
-    # Try to get the supervisor's name from the session state
+    # Ensure start_date and end_date are in the format YYYY-MM-DD for SQL query
+    start_date = datetime.strptime(start_date, '%d-%m-%Y').strftime('%Y-%m-%d')
+    end_date = datetime.strptime(end_date, '%d-%m-%Y').strftime('%Y-%m-%d')
+
     supervisor_name = sname
-     # Check if the supervisor name exists, else show an error
     if not supervisor_name:
         st.warning("Unable to fetch supervisor name. Please ensure you are logged in correctly.")
         return
 
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
 
-    # Modify the query to include a filter for the supervisor's name
-    query = '''SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, a.Attendance_Date, a.Shift_Duration
-               FROM Attendance a
-               JOIN User_Credentials u ON a.Code = u.Code
-               JOIN User_Credentials s ON u.Supervisor_Code = s.Code
-               WHERE a.Attendance_Date BETWEEN ? AND ?
-               AND s.Name = ?'''  # Filter by supervisor name
+    # Query with date filtering and case-insensitive supervisor name filtering
+    query = '''
+    SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
+           a.Attendance_Date, a.Shift_Duration
+    FROM Attendance a
+    JOIN User_Credentials u ON a.Code = u.Code
+    JOIN User_Credentials s ON u.Supervisor_Code = s.Code
+    WHERE DATE(substr(a.Attendance_Date, 7, 4) || '-' || substr(a.Attendance_Date, 4, 2) || '-' || substr(a.Attendance_Date, 1, 2)) 
+          BETWEEN DATE(?) AND DATE(?)
+          AND s.Name = ? COLLATE NOCASE
+    '''
 
-    # Pass the supervisor's name as a parameter to the SQL query
+    # Execute query with parameters
     df = pd.read_sql_query(query, conn, params=(start_date, end_date, supervisor_name))
     conn.close()
+
+    # Debugging information
+    st.write("Attendance data for technicians under: ", supervisor_name)
+
+    # Display the initial data for verification
+    # Activate to test
+    # st.write("Filtered data from query:", df)
 
     if df.empty:
         st.warning("No attendance data found for the selected date range.")
         return
 
-    # Convert 'Attendance_Date' to datetime format and 'Shift_Duration' to timedelta
-    df['Attendance_Date'] = pd.to_datetime(df['Attendance_Date'], format='%d-%m-%Y')
-    df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'])
+    # Data transformations
+    df['Attendance_Date'] = pd.to_datetime(df['Attendance_Date'], format='%d-%m-%Y', errors='coerce')
+    df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'], errors='coerce')
+    df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # Sundays
 
-    # Create a new column to check if the attendance date is a Sunday
-    df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # 6 means Sunday
-
-    # Group by Supervisor and Technician, calculate total days, total hours, and count of Sundays
+    # Group by supervisor and technician to get the required summary
     summary = df.groupby(['Supervisor_Name', 'Technician_Name']).agg(
         Total_Days=('Attendance_Date', 'nunique'),
         Total_Hours=('Shift_Duration', 'sum'),
-        Sundays=('Is_Sunday', 'sum')  # Count how many times 'Is_Sunday' is True
+        Sundays=('Is_Sunday', 'sum')
     ).reset_index()
 
-    # Convert total hours back to HH:MM:SS format
-    summary['Total_Hours'] = summary['Total_Hours'].dt.components.apply(
-        lambda x: f"{int(x['days'])*24 + int(x['hours']):02}:{int(x['minutes']):02}:{int(x['seconds']):02}", axis=1)
+    # Format total hours
+    summary['Total_Hours'] = summary['Total_Hours'].apply(
+        lambda x: f"{int(x.total_seconds() // 3600):02}:{int((x.total_seconds() % 3600) // 60):02}:{int(x.total_seconds() % 60):02}"
+    )
 
-    # Rearranging columns to place 'Sundays' before 'Total_Hours'
+    # Rearrange and display data
     summary = summary[['Supervisor_Name', 'Technician_Name', 'Total_Days', 'Sundays', 'Total_Hours']]
-
     st.dataframe(summary)
 
-    # Provide an option to download the report as Excel
+    # Export to Excel for download
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary.to_excel(writer, index=False)
     output.seek(0)
 
     st.download_button(label="Download Attendance Report", data=output, file_name="Attendance_Report.xlsx", mime="application/vnd.ms-excel")
-
 
 #=================================================================
 # Function to download data as Excel
