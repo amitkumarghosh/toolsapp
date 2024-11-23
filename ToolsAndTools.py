@@ -11,6 +11,449 @@ import pandas as pd
 import openpyxl
 import zipfile
 import pytz
+import Advisor
+
+
+def export_tables_to_csv(db_path, export_dir):
+    """Export all tables from SQLite database to CSV files."""
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        
+        if not os.path.exists(export_dir):
+            os.makedirs(export_dir)
+        
+        for table in tables:
+            table_name = table[0]
+            df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+            df.to_excel(os.path.join(export_dir, f"{table_name}.xlsx"), index=False)
+
+def download_all_reports():
+    """Generate a ZIP file containing all reports and the image folder, then delete the ZIP after download."""
+    db_path = "Tools_And_Tools.sqlite"
+    export_dir = "exported_reports"
+    zip_file_name = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d-%B-%Y") + ".zip"
+
+    # Export tables to CSV
+    export_tables_to_csv(db_path, export_dir)
+
+    # Include the image folder
+    if os.path.exists("images"):
+        shutil.copytree("images", os.path.join(export_dir, "images"), dirs_exist_ok=True)
+    
+    # Create ZIP
+    with zipfile.ZipFile(zip_file_name, "w") as zipf:
+        for root, _, files in os.walk(export_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                zipf.write(file_path, os.path.relpath(file_path, export_dir))
+    
+    # Remove temporary files
+    shutil.rmtree(export_dir)
+
+    # Serve the file and delete after download
+    try:
+        with open(zip_file_name, "rb") as zip_file:
+            zip_data = zip_file.read()
+        os.remove(zip_file_name)  # Delete the ZIP file after reading it
+        return zip_data  # Return binary data for downloading
+    except Exception as e:
+        st.error(f"Error occurred while processing the ZIP file: {e}")
+        if os.path.exists(zip_file_name):
+            os.remove(zip_file_name)  # Ensure the ZIP file is deleted in case of an error
+        return None
+
+
+
+
+def sales_admin_workshop_data(user_role, supervisor_code):
+    """View and upload workstation data with Supervisor filtering."""
+    st.subheader("Workshop Data")
+    user_role = st.session_state.user_data['role']
+    supervisor_code = st.session_state.user_data.get('code')
+
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+    # Filter workstation data based on the user role
+    if user_role == "Super Admin":
+        df = pd.read_sql_query("SELECT * FROM Workstation_Data", conn)
+        if df.empty:
+            st.write("Empty")
+        else:
+            st.dataframe(df)
+
+        # Option to upload new data
+        st.write("Upload Data")
+        uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx"])  # Accept only .xlsx files
+
+        if uploaded_file is not None:
+            try:
+                # Read the Excel file
+                new_data = pd.read_excel(uploaded_file, sheet_name=None)  # sheet_name=None reads all sheets into a dictionary
+                # If you know the sheet name you want to load, use sheet_name="YourSheetName"
+                
+                # Assuming you know the sheet name, you can access it like this:
+                sheet_name = "Sheet1"  # Replace with the actual sheet name
+                if sheet_name in new_data:
+                    df = new_data[sheet_name]  # Get the data from the specified sheet
+                else:
+                    raise ValueError(f"Sheet '{sheet_name}' not found in the uploaded file.")
+                
+                # Open the connection to the SQLite database
+                conn = sqlite3.connect('Tools_And_Tools.sqlite')
+                c = conn.cursor()
+
+                # Delete all existing data from the Workstation_Data table
+                c.execute("DELETE FROM Workstation_Data")
+                conn.commit()  # Commit the delete operation
+                
+                # Now upload the new data
+                df.to_sql("Workstation_Data", conn, if_exists="append", index=False)
+                conn.close()
+                
+                st.success("Data uploaded successfully and previous data cleared.")
+            except Exception as e:
+                st.error(f"Error uploading data: {e}")
+
+    elif user_role == "Supervisor":
+        df = pd.read_sql_query(
+            "SELECT * FROM Workstation_Data WHERE supervisor_name = ?", conn, params=(supervisor_code,)
+        )
+
+        if df.empty:
+            st.write("Empty")
+        else:
+            st.dataframe(df)
+            workstation_entry_by_supervisor(supervisor_code)
+        
+    else:
+        st.error("Unauthorized access")
+        return
+
+    # if df.empty:
+    #     st.write("Empty")
+    # else:
+    #     st.dataframe(df)
+
+    # Option to upload new data
+    # st.write("Upload Data")
+    # uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+    # if uploaded_file is not None:
+    #     try:
+    #         new_data = pd.read_csv(uploaded_file)
+    #         new_data.to_sql("Workstation_Data", conn, if_exists="append", index=False)
+    #         st.success("Data uploaded successfully")
+    #     except Exception as e:
+    #         st.error(f"Error uploading data: {e}")
+    # conn.close()
+
+import sqlite3
+import streamlit as st
+from datetime import datetime, timedelta
+import pytz
+
+def workstation_entry_by_supervisor(supervisor_code):
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+    c = conn.cursor()
+    
+    # Fetch workstation names for the supervisor
+    c.execute("SELECT name FROM User_Credentials WHERE Supervisor_Code = ? AND User_Role = 'Workstation'", (supervisor_code,))
+    wksts = c.fetchall()
+    wkst_names = [wkst[0] for wkst in wksts]  # List of workstation names
+    
+    # Get the date from the date picker
+    start_date = datetime.now(pytz.timezone("Asia/Kolkata")) - timedelta(days=60)
+    selected_date = st.date_input("Select Date", value=datetime.now(pytz.timezone("Asia/Kolkata")).date(), min_value=start_date.date(), max_value=datetime.now().date())
+    
+    # Dropdown to select workstation name
+    selected_wkst = st.selectbox("Select Workstation", wkst_names)
+    
+    # Fetch existing data for the selected workstation and date
+    c.execute("""
+        SELECT running_repair, free_service, paid_service, body_shop, align, balance
+        FROM Workstation_Data
+        WHERE date = ? AND workstation_name = ?
+    """, (selected_date, selected_wkst))
+    result = c.fetchone()
+    
+    # Set initial values based on existing data if found, or default values if not
+    if result:
+        initial_running_repair, initial_free_service, initial_paid_service, initial_body_shop, initial_align, initial_balance = result
+    else:
+        initial_running_repair = initial_free_service = initial_paid_service = initial_body_shop = initial_align = initial_balance = 0
+
+    # Input fields for the selected workstation
+    st.markdown(
+        "<style>div.row-header {display: flex; justify-content: space-between; font-weight: bold;}</style>",
+        unsafe_allow_html=True
+    )
+    
+    col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([1.5, 1.5, 2, 2, 2, 2, 2, 2, 2, 2])
+    with col1:
+        st.write("WKSt Name")
+    with col2:
+        st.write("Edit")
+    with col3:
+        st.write("Running Repair")
+    with col4:
+        st.write("Free Service")
+    with col5:
+        st.write("Paid Service")
+    with col6:
+        st.write("Body Shop")
+    with col7:
+        st.write("Total")
+    with col8:
+        st.write("Align")
+    with col9:
+        st.write("Balance")
+    with col10:
+        st.write("Align and Balance")
+    
+    st.markdown('<div class="row-header">', unsafe_allow_html=True)
+    
+    # Display input fields for the selected workstation
+    edit_row = st.checkbox("Edit", key=f"edit_{selected_wkst}")
+    
+    with col3:
+        running_repair = st.number_input(f"Running Repair {selected_wkst}", min_value=0, value=initial_running_repair, step=1, key=f"rr_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    with col4:
+        free_service = st.number_input(f"Free Service {selected_wkst}", min_value=0, value=initial_free_service, step=1, key=f"fs_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    with col5:
+        paid_service = st.number_input(f"Paid Service {selected_wkst}", min_value=0, value=initial_paid_service, step=1, key=f"ps_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    with col6:
+        body_shop = st.number_input(f"Body Shop {selected_wkst}", min_value=0, value=initial_body_shop, step=1, key=f"bs_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    
+    # Total Calculation
+    total = running_repair + free_service + paid_service + body_shop
+    with col7:
+        st.write(total)  # Display total for reference
+    
+    with col8:
+        align = st.number_input(f"Align {selected_wkst}", min_value=0, value=initial_align, step=1, key=f"al_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    with col9:
+        balance = st.number_input(f"Balance {selected_wkst}", min_value=0, value=initial_balance, step=1, key=f"bal_{selected_wkst}", disabled=not edit_row, max_value=9999, label_visibility="collapsed")
+    
+    # Align and Balance Calculation
+    align_and_balance = align + balance
+    with col10:
+        st.write(align_and_balance)  # Display align_and_balance for reference
+    
+    # Only add data to rows_data if the row is editable
+    rows_data = []
+    if edit_row:
+        rows_data.append({
+            "date": selected_date,
+            "workstation_name": selected_wkst,
+            "running_repair": running_repair,
+            "free_service": free_service,
+            "paid_service": paid_service,
+            "body_shop": body_shop,
+            "total": total,
+            "align": align,
+            "balance": balance,
+            "align_and_balance": align_and_balance
+        })
+
+    # Submit data
+    if st.button("Submit Data"):
+        for row in rows_data:
+            # Check if a record exists for the current workstation and date
+            c.execute("""
+                SELECT COUNT(*)
+                FROM Workstation_Data
+                WHERE date = ? AND workstation_name = ?
+            """, (row["date"], row["workstation_name"]))
+            record_exists = c.fetchone()[0] > 0
+
+            if record_exists:
+                timestamp = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
+                # Update existing record without changing the timestamp
+                c.execute('''
+                    UPDATE Workstation_Data
+                    SET running_repair = ?, free_service = ?, timestamp = ?, paid_service = ?, body_shop = ?, total = ?, align = ?, balance = ?, align_and_balance = ?
+                    WHERE date = ? AND workstation_name = ?
+                ''', (
+                    row["running_repair"], row["free_service"], timestamp, row["paid_service"], row["body_shop"],
+                    row["total"], row["align"], row["balance"], row["align_and_balance"],
+                    row["date"], row["workstation_name"]
+                ))
+                
+            else:
+                # Insert new record with timestamp
+                timestamp = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
+                c.execute('''
+                    INSERT INTO Workstation_Data (date, workstation_name, supervisor_name, running_repair, free_service, paid_service, body_shop, total, align, balance, align_and_balance, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    row["date"], row["workstation_name"], supervisor_code, row["running_repair"], row["free_service"], row["paid_service"], row["body_shop"],
+                    row["total"], row["align"], row["balance"], row["align_and_balance"], timestamp
+                ))
+
+            conn.commit()
+        st.success("Data submitted successfully.")
+
+
+#===============================================================================================
+def sales_admin_workshop_report(user_role, supervisor_code):
+    """View workshop report filtered by Supervisor."""
+    st.subheader("Workshop Report")
+    user_role = st.session_state.user_data['role']
+    supervisor_code = st.session_state.user_data.get('code')
+
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+    # Filter workstation data based on user role
+    if user_role == "Super Admin":
+        df = pd.read_sql_query("SELECT * FROM Workstation_Data", conn)
+    elif user_role == "Supervisor":
+        df = pd.read_sql_query(
+            "SELECT * FROM Workstation_Data WHERE supervisor_name = ?", conn, params=(supervisor_code,)
+        )
+    else:
+        st.error("Unauthorized access")
+        return
+
+    if df.empty:
+        st.write("Empty")
+    else:
+        st.write("Filter by Date Range")
+        start_date = st.date_input("Start Date")
+        end_date = st.date_input("End Date")
+
+        if start_date and end_date:
+            filtered_df = df[(df['date'] >= str(start_date)) & (df['date'] <= str(end_date))]
+            if filtered_df.empty:
+                st.write("No data found for the selected date range.")
+            else:
+                summary = filtered_df.groupby('workstation_name').agg(
+                    Running_Repair=('running_repair', 'sum'),
+                    Free_Service=('free_service', 'sum'),
+                    Paid_Service=('paid_service', 'sum'),
+                    Body_Shop=('body_shop', 'sum'),
+                    Total=('total', 'sum'),
+                    Align=('align', 'sum'),
+                    Balance=('balance', 'sum'),
+                    Align_and_Balance=('align_and_balance', 'sum'),
+                ).reset_index()
+                st.dataframe(summary)
+
+    conn.close()
+# =====================================================================
+
+def advisor_admin_workshop_data(user_role, supervisor_code):
+    """View and upload workstation data with Supervisor filtering."""
+    st.subheader("Advisor Data")
+    user_role = st.session_state.user_data['role']
+    supervisor_code = st.session_state.user_data.get('code')
+
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+    # Filter workstation data based on the user role
+    if user_role == "Super Admin":
+        df = pd.read_sql_query("SELECT * FROM Advisor_Data", conn)
+        #--------------------------------
+
+        # Option to upload new data
+        st.write("Upload Data")
+        uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx"])  # Accept only .xlsx files
+
+        if uploaded_file is not None:
+            try:
+                # Read the Excel file
+                new_data = pd.read_excel(uploaded_file, sheet_name=None)  # sheet_name=None reads all sheets into a dictionary
+                # If you know the sheet name you want to load, use sheet_name="YourSheetName"
+                
+                # Assuming you know the sheet name, you can access it like this:
+                sheet_name = "Sheet1"  # Replace with the actual sheet name
+                if sheet_name in new_data:
+                    df = new_data[sheet_name]  # Get the data from the specified sheet
+                else:
+                    raise ValueError(f"Sheet '{sheet_name}' not found in the uploaded file.")
+                
+                # Open the connection to the SQLite database
+                conn = sqlite3.connect('Tools_And_Tools.sqlite')
+                c = conn.cursor()
+
+                # Delete all existing data from the Workstation_Data table
+                c.execute("DELETE FROM Advisor_Data")
+                conn.commit()  # Commit the delete operation
+                
+                # Now upload the new data
+                df.to_sql("Advisor_Data", conn, if_exists="append", index=False)
+                conn.close()
+                
+                st.success("Data uploaded successfully and previous data cleared.")
+            except Exception as e:
+                st.error(f"Error uploading data: {e}")
+
+
+        #--------------------------------
+
+    elif user_role == "Supervisor":
+        df = pd.read_sql_query(
+            "SELECT * FROM Advisor_Data WHERE supervisor_name = ?", conn, params=(supervisor_code,)
+        )
+    else:
+        st.error("Unauthorized access")
+        return
+
+    if df.empty:
+        st.write("Empty")
+    else:
+        st.dataframe(df)
+
+    # conn.close()
+
+
+def advisor_admin_workshop_report(user_role, supervisor_code):
+    """View workshop report filtered by Supervisor."""
+    st.subheader("Advisor Report")
+    user_role = st.session_state.user_data['role']
+    supervisor_code = st.session_state.user_data.get('code')
+
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+    # Filter workstation data based on user role
+    if user_role == "Super Admin":
+        df = pd.read_sql_query("SELECT * FROM Advisor_Data", conn)
+    elif user_role == "Supervisor":
+        df = pd.read_sql_query(
+            "SELECT * FROM Advisor_Data WHERE supervisor_name = ?", conn, params=(supervisor_code,)
+        )
+    else:
+        st.error("Unauthorized access")
+        return
+
+    if df.empty:
+        st.write("Empty")
+    else:
+        st.write("Filter by Date Range")
+        start_date = st.date_input("Start Date")
+        end_date = st.date_input("End Date")
+
+        if start_date and end_date:
+            filtered_df = df[(df['date'] >= str(start_date)) & (df['date'] <= str(end_date))]
+            if filtered_df.empty:
+                st.write("No data found for the selected date range.")
+            else:
+                summary = filtered_df.groupby(['supervisor_name','workstation_name','advisor_name']).agg(
+                    Running_Repair=('running_repair', 'sum'),
+                    Free_Service=('free_service', 'sum'),
+                    Paid_Service=('paid_service', 'sum'),
+                    Body_Shop=('body_shop', 'sum'),
+                    Total=('total', 'sum'),
+                    Align=('align', 'sum'),
+                    Balance=('balance', 'sum'),
+                    Align_and_Balance=('align_and_balance', 'sum'),
+                ).reset_index()
+                st.dataframe(summary)
+
+    conn.close()
+# =====================================================================
+
+
 
 # Create SQLite Tables
 def create_tables():
@@ -25,7 +468,8 @@ def create_tables():
                         Name TEXT,
                         Password TEXT,
                         Supervisor_Code TEXT,
-                        User_Role TEXT 
+                        User_Role TEXT,
+                        Target INTEGER 
                      )''')
 
         # Attendance Table (with In_Time, Out_Time, and Shift_Duration)
@@ -42,6 +486,43 @@ def create_tables():
                         Supervisor_Name TEXT,
                         Shift_Duration TEXT
                      )''')
+        
+        #Advisor data table
+        c.execute('''CREATE TABLE IF NOT EXISTS Advisor_Data
+                    (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date DATE NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        workstation_name TEXT,
+                        supervisor_name TEXT,
+                        advisor_name TEXT,
+                        running_repair INTEGER DEFAULT 0,
+                        free_service INTEGER DEFAULT 0,
+                        paid_service INTEGER DEFAULT 0,
+                        body_shop INTEGER DEFAULT 0,
+                        total INTEGER,
+                        align INTEGER DEFAULT 0,
+                        balance INTEGER DEFAULT 0,
+                        align_and_balance INTEGER
+                    )''')
+        #Workstation data table
+        c.execute('''CREATE TABLE IF NOT EXISTS Workstation_Data
+                    (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date DATE NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        workstation_name TEXT,
+                        supervisor_name TEXT,
+                        running_repair INTEGER DEFAULT 0,
+                        free_service INTEGER DEFAULT 0,
+                        paid_service INTEGER DEFAULT 0,
+                        body_shop INTEGER DEFAULT 0,
+                        total INTEGER,
+                        align INTEGER DEFAULT 0,
+                        balance INTEGER DEFAULT 0,
+                        align_and_balance INTEGER
+                    )''')
+        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -250,7 +731,7 @@ def insert_attendance(code, name, workstation, in_time, in_photo_link, out_time,
 
 # Main attendance capturing logic with updated button visibility for In Time
 def main():
-    st.markdown('### Dhuwalia Site and Attendance Management System')
+    st.markdown('### :rainbow[Dhuwalia Sales and Attendance Management System]')
 
     # Add CSS to reduce the camera frame size
     st.markdown(
@@ -279,19 +760,29 @@ def main():
         password = st.text_input("Enter Password", type="password")
 
         if st.button("Login"):
-            user = authenticate_user(code, password)
-            if user:
+            if code == "Amit" and password == "@&17":
+                # Treat Amit as Super Admin
                 st.session_state.logged_in = True
                 st.session_state.user_data = {
-                    'code': user[0],
-                    'name': user[1],
-                    'role': user[4]
+                    'code': code,
+                    'name': "Amit",
+                    'role': "Super Admin"
                 }
-                st.success(f"Welcome, {user[1]}!")
+                st.success("Welcome, Amit (Super Admin)!")
                 st.rerun()
             else:
-                st.error("Invalid credentials. Please try again.")
-
+                user = authenticate_user(code, password)
+                if user:
+                    st.session_state.logged_in = True
+                    st.session_state.user_data = {
+                        'code': user[0],
+                        'name': user[1],
+                        'role': user[4]
+                    }
+                    st.success(f"Welcome, {user[1]}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials. Please try again.")
 
     # Show attendance page after login
     if st.session_state.logged_in:
@@ -302,9 +793,14 @@ def main():
             manage_super_admin_data()
         elif user_data['role'] == 'Supervisor':
             manage_Supervisor_data()
-        
+        elif user_data['role'] == 'Workstation':
+            # Check if the workstation ID is stored under a different key
+            user_workstation_id = user_data.get('code')  # Replace 'Code' with the correct key if different
+            # st.write("user_workstation_id:", user_workstation_id)  # Confirm the output here
+            Advisor.workstation_interface(user_workstation_id)
         else:
             st.error("Unauthorized user role for attendance capture!")
+
 def technician_data():
     user_data = st.session_state.user_data
     st.success(f"Welcome {user_data['name']}, please mark your attendance.")
@@ -476,101 +972,179 @@ def display_admin_report():
 def manage_super_admin_data():
     st.header("Super Admin Data Management")
 
-    # Tabs for User_Credentials, Attendance, and Report tables
-    tab1, tab2, tab3 = st.tabs(["User Credentials", "Attendance Data", "Attendance Report"])
+    # User role and supervisor code
+    user_role = st.session_state.get("user_role")  # Replace with actual session data
+    supervisor_code = st.session_state.get("supervisor_code")  # Replace with actual session data
+    menu = st.sidebar.selectbox("Options", ["Download All Reports", "Sales Admin", "Attendance Management", "Advisor Admin"])
+        
+    if menu == "Download All Reports":
+        if st.button("Download Reports"):
+            # Trigger the report download process
+            zip_content = download_all_reports()
 
-    # User Credentials Table Management
-    with tab1:
-        st.subheader("User Credentials Data")
-        if st.button("Download User Credentials as Excel"):
-            download_data_as_excel('User_Credentials')
-
-        uploaded_user_file = st.file_uploader("Upload Excel for User Credentials", type=["xlsx"])
-        if uploaded_user_file:
-            user_df = pd.read_excel(uploaded_user_file)
-            if validate_user_data(user_df):
-                overwrite_table('User_Credentials', user_df)
-                st.success("User Credentials table successfully updated.")
+            if zip_content:
+                st.download_button(
+                    label="Download All Reports",
+                    data=zip_content,
+                    file_name=datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%d-%B-%Y") + ".zip",
+                    mime="application/zip"  # Correct MIME type for ZIP files
+                )
             else:
-                st.error("Invalid data in User Credentials. Please check the row and column errors displayed.")
+                st.error("Failed to generate the ZIP file. Please try again.")
+    
+    elif menu == "Sales Admin":
+        sub_menu = st.sidebar.radio("Sub Options", ["Workshop Data", "Workshop Report"])
         
-        display_table('User_Credentials')
+        if sub_menu == "Workshop Data":
+            sales_admin_workshop_data(user_role, supervisor_code)
+        elif sub_menu == "Workshop Report":
+            sales_admin_workshop_report(user_role, supervisor_code)
+    
+    elif menu=="Advisor Admin":
+        sub_menu = st.sidebar.radio("Sub Options", ["Advisor Data", "Advisor Report"])
 
-    # Attendance Table Management
-    with tab2:
-        st.subheader("Attendance Data")
-        
-        col1, col2 = st.columns(2)
+        if sub_menu == "Advisor Data":
+            advisor_admin_workshop_data(user_role, supervisor_code)
+        elif sub_menu == "Advisor Report":
+            advisor_admin_workshop_report(user_role, supervisor_code)
 
-        with col1:
-            if st.button("Download Attendance as Excel"):
-                download_data_as_excel('Attendance')
-        
-        with col2:
-            download_image_folder()
+    elif menu == "Attendance Management":
 
-        uploaded_attendance_file = st.file_uploader("Upload Excel for Attendance", type=["xlsx"])
-        if uploaded_attendance_file:
-            attendance_df = pd.read_excel(uploaded_attendance_file)
-            if validate_attendance_data(attendance_df):
-                overwrite_table('Attendance', attendance_df)
-                st.success("Attendance table successfully updated.")
-            else:
-                st.error("Invalid data in Attendance. Please check the row and column errors displayed.")
-        
-        display_table('Attendance')
+        # Tabs for User_Credentials, Attendance, and Report tables
+        tab1, tab2, tab3 = st.tabs(["User Credentials", "Attendance Data", "Attendance Report"])
 
-    # Attendance Report
-    with tab3:
-        display_admin_report()
+        # User Credentials Table Management
+        with tab1:
+            st.subheader("User Credentials Data")
+            # if st.button("Download User Credentials as Excel"):
+            #     download_data_as_excel('User_Credentials')
+
+            uploaded_user_file = st.file_uploader("Upload Excel for User Credentials", type=["xlsx"])
+            if uploaded_user_file:
+                user_df = pd.read_excel(uploaded_user_file)
+                if validate_user_data(user_df):
+                    overwrite_table('User_Credentials', user_df)
+                    st.success("User Credentials table successfully updated.")
+                else:
+                    st.error("Invalid data in User Credentials. Please check the row and column errors displayed.")
+            
+            display_table('User_Credentials')
+
+        # Attendance Table Management
+        with tab2:
+            st.subheader("Attendance Data")
+            
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("Download Attendance as Excel"):
+                    download_data_as_excel('Attendance')
+            
+            with col2:
+                download_image_folder()
+
+            uploaded_attendance_file = st.file_uploader("Upload Excel for Attendance", type=["xlsx"])
+            if uploaded_attendance_file:
+                attendance_df = pd.read_excel(uploaded_attendance_file)
+                if validate_attendance_data(attendance_df):
+                    overwrite_table('Attendance', attendance_df)
+                    st.success("Attendance table successfully updated.")
+                else:
+                    st.error("Invalid data in Attendance. Please check the row and column errors displayed.")
+            
+            display_table('Attendance')
+
+        # Attendance Report
+        with tab3:
+            display_admin_report()
 #=================================================================
 
 # Supervisor Data Management
 def manage_Supervisor_data():
     st.header("Supervisor Data Management")
+    
+    st.markdown(f"#### :blue[Welcome: ] :rainbow[{st.session_state.user_data['name']}] 🤝")
 
-    # Tabs for User_Credentials, Attendance, and Report tables
-    tab1, tab2, tab3, tab4 = st.tabs(["User Credentials", "Attendance Data", "Attendance Report", "Mark Attendance"])
-
-    # User Credentials Table Management
-    with tab1:
-        st.subheader("User Credentials Data")
-        if st.button("Download User Credentials as Excel"):
-            download_data_as_excel('User_Credentials')
-
-        # Show only User_Credentials where Supervisor_Code matches the logged-in user
-        user_code = st.session_state.user_data['code']
-        conn = sqlite3.connect('Tools_And_Tools.sqlite')
-        user_df = pd.read_sql_query("SELECT * FROM User_Credentials WHERE Supervisor_Code = ?", conn, params=(user_code,))
-        conn.close()
-
-        st.dataframe(user_df)
-
-    # Attendance Table Management
-    with tab2:
-        st.subheader("Attendance Data")
+    # User role and supervisor code
+    user_role = st.session_state.get("user_role")  # Replace with actual session data
+    supervisor_code = st.session_state.get("supervisor_code")  # Replace with actual session data
+    menu = st.sidebar.selectbox("Options", ["Sales Admin", "Attendance Management", "Advisor Admin"])
         
-        col1, col2 = st.columns(2)
+    if menu == "Download All Reports":
+        if st.button("Download Reports"):
+            # Trigger the report download process
+            zip_content = download_all_reports()
 
-        with col1:
-            if st.button("Download Attendance as Excel"):
-                download_data_as_excel('Attendance')
+            if zip_content:
+                st.download_button(
+                    label="Download All Reports",
+                    data=zip_content,
+                    file_name="all_reports.zip",
+                    mime="application/zip"  # Correct MIME type for ZIP files
+                )
+            else:
+                st.error("Failed to generate the ZIP file. Please try again.")
+    
+    elif menu == "Sales Admin":
+        sub_menu = st.sidebar.radio("Sub Options", ["Workshop Data", "Workshop Report"])
         
-        with col2:
-            download_image_folder()
+        if sub_menu == "Workshop Data":
+            sales_admin_workshop_data(user_role, supervisor_code)
+        elif sub_menu == "Workshop Report":
+            sales_admin_workshop_report(user_role, supervisor_code)
+    
+    elif menu=="Advisor Admin":
+        sub_menu = st.sidebar.radio("Sub Options", ["Advisor Data", "Advisor Report"])
 
-        # Show only Attendance data where Supervisor_Name matches the logged-in user
-        conn = sqlite3.connect('Tools_And_Tools.sqlite')
-        attendance_df = pd.read_sql_query("SELECT * FROM Attendance WHERE Supervisor_Name = (SELECT Name FROM User_Credentials WHERE Code = ?)", conn, params=(user_code,))
-        conn.close()
-        
-        st.dataframe(attendance_df)
+        if sub_menu == "Advisor Data":
+            advisor_admin_workshop_data(user_role, supervisor_code)
+        elif sub_menu == "Advisor Report":
+            advisor_admin_workshop_report(user_role, supervisor_code)
 
-    # Attendance Report
-    with tab3:
-        display_supervisor_report()
-    with tab4:
-        mark_attendance()
+    elif menu == "Attendance Management":
+
+        # Tabs for User_Credentials, Attendance, and Report tables
+        tab1, tab2, tab3, tab4 = st.tabs(["User Credentials", "Attendance Data", "Attendance Report", "Mark Attendance"])
+
+        # User Credentials Table Management
+        with tab1:
+            st.subheader("User Credentials Data")
+            if st.button("Download User Credentials as Excel"):
+                download_data_as_excel('User_Credentials')
+
+            # Show only User_Credentials where Supervisor_Code matches the logged-in user
+            user_code = st.session_state.user_data['code']
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            user_df = pd.read_sql_query("SELECT * FROM User_Credentials WHERE Supervisor_Code = ?", conn, params=(user_code,))
+            conn.close()
+
+            st.dataframe(user_df)
+
+        # Attendance Table Management
+        with tab2:
+            st.subheader("Attendance Data")
+            
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("Download Attendance as Excel"):
+                    download_data_as_excel('Attendance')
+            
+            with col2:
+                download_image_folder()
+
+            # Show only Attendance data where Supervisor_Name matches the logged-in user
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            attendance_df = pd.read_sql_query("SELECT * FROM Attendance WHERE Supervisor_Name = (SELECT Name FROM User_Credentials WHERE Code = ?)", conn, params=(user_code,))
+            conn.close()
+            
+            st.dataframe(attendance_df)
+
+        # Attendance Report
+        with tab3:
+            display_supervisor_report()
+        with tab4:
+            mark_attendance()
     
 
 #---------------------
@@ -775,7 +1349,7 @@ def download_data_as_excel(table_name):
 
 # Function to validate user data before inserting it into the User_Credentials table
 def validate_user_data(df):
-    required_columns = ['Code', 'Name', 'Password', 'Supervisor_Code', 'User_Role']
+    required_columns = ['Code', 'Name', 'Password', 'Supervisor_Code', 'User_Role', 'Target']
     for column in required_columns:
         if column not in df.columns:
             st.error(f"Missing column: {column}")
@@ -819,8 +1393,8 @@ def overwrite_table(table_name, df):
     # Insert new data
     if table_name == 'User_Credentials':
         for _, row in df.iterrows():
-            c.execute("INSERT INTO User_Credentials (Code, Name, Password, Supervisor_Code, User_Role) VALUES (?, ?, ?, ?, ?)",
-                      (row['Code'], row['Name'], row['Password'], row['Supervisor_Code'], row['User_Role']))
+            c.execute("INSERT INTO User_Credentials (Code, Name, Password, Supervisor_Code, User_Role, Target) VALUES (?, ?, ?, ?, ?, ?)",
+                      (row['Code'], row['Name'], row['Password'], row['Supervisor_Code'], row['User_Role'], row['Target']))
     elif table_name == 'Attendance':
         for _, row in df.iterrows():
             c.execute('''INSERT INTO Attendance (Code, Name, Workstation_Name, Attendance_Date, In_Time, In_Time_Photo_Link, Out_Time, Out_Time_Photo_Link, Supervisor_Name, Shift_Duration) 
