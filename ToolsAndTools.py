@@ -148,10 +148,7 @@ def sales_admin_workshop_data(user_role, supervisor_code):
     #         st.error(f"Error uploading data: {e}")
     # conn.close()
 
-import sqlite3
-import streamlit as st
-from datetime import datetime, timedelta
-import pytz
+
 
 def workstation_entry_by_supervisor(supervisor_code):
     conn = sqlite3.connect('Tools_And_Tools.sqlite')
