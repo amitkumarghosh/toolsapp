@@ -470,8 +470,8 @@ def create_tables():
                      )''')
 
         # Attendance Table (with In_Time, Out_Time, and Shift_Duration)
-        c.execute('''CREATE TABLE IF NOT EXISTS Attendance
-                     (
+        c.execute('''
+                    CREATE TABLE IF NOT EXISTS Attendance (
                         Code TEXT,
                         Name TEXT,
                         Workstation_Name TEXT,
@@ -481,8 +481,20 @@ def create_tables():
                         Out_Time TEXT,
                         Out_Time_Photo_Link TEXT,
                         Supervisor_Name TEXT,
-                        Shift_Duration TEXT
-                     )''')
+                        Shift_Duration TEXT,
+                        Holiday INTEGER,
+                        Holiday_Remarks TEXT,
+                        PRIMARY KEY (Code, Attendance_Date)
+                    )
+                    ''')
+
+        #Past attendance enable by Amit
+        c.execute('''CREATE TABLE IF NOT EXISTS Past_Attendance
+             (
+                Status TEXT,  -- "Enabled" or "Disabled"
+                Days INTEGER  -- Number of days allowed for past attendance
+             )''')
+
         
         #Advisor data table
         c.execute('''CREATE TABLE IF NOT EXISTS Advisor_Data
@@ -671,6 +683,10 @@ def calculate_shift_duration(in_time_str, out_time_str):
     
     # Calculate the difference
     shift_duration = out_time - in_time
+    # if out_time==in_time:
+    #     shift_duration=0
+    # else:
+    #     shift_duration = out_time - in_time
     return shift_duration
 
 # Fetch supervisor name for the logged-in user based on Supervisor_Code
@@ -802,11 +818,6 @@ def technician_data():
     user_data = st.session_state.user_data
     st.success(f"Welcome {user_data['name']}, please mark your attendance.")
 
-   
-    # Display workstation dropdown
-    workstations = fetch_workstations()
-    selected_workstation = st.selectbox("Select Workstation", workstations)
-
     # Set the timezone to Indian Standard Time (UTC+5:30)
     ist = pytz.timezone('Asia/Kolkata')
 
@@ -814,54 +825,65 @@ def technician_data():
     attendance_date = datetime.now(ist).strftime("%d-%m-%Y")
     st.write(f"Attendance Date: {attendance_date}")
 
+    
     # In time photo and capture
     if not has_in_time_recorded_today(user_data['code']):
-        in_photo = st.camera_input("Start Shift (In Time)")
-        if in_photo:
-            in_time = datetime.now(ist).strftime("%I.%M.%S %p")
+        # Display workstation dropdown
+        workstations = fetch_workstations()
+        selected_workstation = st.selectbox("Select Workstation",[""] + workstations)
+        if selected_workstation =="":
+            st.warning("Please select your workstation first")
+        else:
+            in_photo = st.camera_input("Start Shift (In Time)")
+            if in_photo:
+                in_time = datetime.now(ist).strftime("%I.%M.%S %p")
+                out_time=in_time
+                
+                # Read the image data from the uploaded file
+                in_photo_bytes = in_photo.read()
+
+                if in_photo_bytes:
+                    supervisor_name = fetch_supervisor_name(user_data['code'])
+                    in_photo_link = save_image(in_photo_bytes, user_data['code'], "in")
+                    insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, in_photo_link, None, None, supervisor_name, None)
+                    st.success("In Time and photo captured successfully!")
+                    st.rerun()
+    else:
+        
+        st.warning("You have already recorded your In Time for today!")
+
+            
+
+        # Out time photo and capture
+        out_photo = st.camera_input("End Shift (Out Time)")
+        if out_photo:
+            out_time = datetime.now(ist).strftime("%I.%M.%S %p")
 
             # Read the image data from the uploaded file
-            in_photo_bytes = in_photo.read()
+            out_photo_bytes = out_photo.read()
 
-            if in_photo_bytes:
-                supervisor_name = fetch_supervisor_name(user_data['code'])
-                in_photo_link = save_image(in_photo_bytes, user_data['code'], "in")
-                insert_attendance(user_data['code'], user_data['name'], selected_workstation, in_time, in_photo_link, None, None, supervisor_name, None)
-                st.success("In Time and photo captured successfully!")
-    else:
-        st.warning("You have already recorded your In Time for today!")
-        
+            # Fetch in_time to calculate shift duration
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            c = conn.cursor()
+            c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (user_data['code'], attendance_date))
+            in_time_result = c.fetchone()  # Fetch the result
 
-    # Out time photo and capture
-    out_photo = st.camera_input("End Shift (Out Time)")
-    if out_photo:
-        out_time = datetime.now(ist).strftime("%I.%M.%S %p")
+            if in_time_result:
+                in_time = in_time_result[0]  # Extract the In_Time value from the tuple
+                st.success(f"In Time found: {in_time}")
+            else:
+                # If no record is found, handle the error appropriately
+                st.error("No in_time found for the given code and date")
+                conn.close()  # Close the connection
+                return  # Stop further execution
 
-        # Read the image data from the uploaded file
-        out_photo_bytes = out_photo.read()
+            conn.close()
 
-        # Fetch in_time to calculate shift duration
-        conn = sqlite3.connect('Tools_And_Tools.sqlite')
-        c = conn.cursor()
-        c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (user_data['code'], attendance_date))
-        in_time_result = c.fetchone()  # Fetch the result
-
-        if in_time_result:
-            in_time = in_time_result[0]  # Extract the In_Time value from the tuple
-            st.success(f"In Time found: {in_time}")
-        else:
-            # If no record is found, handle the error appropriately
-            st.error("No in_time found for the given code and date")
-            conn.close()  # Close the connection
-            return  # Stop further execution
-
-        conn.close()
-
-        if out_photo_bytes and in_time:
-            shift_duration = calculate_shift_duration(in_time, out_time)  # Pass in_time as a string
-            out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
-            insert_attendance(user_data['code'], user_data['name'], selected_workstation, None, None, out_time, out_photo_link, None, shift_duration)
-            st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
+            if out_photo_bytes and in_time:
+                shift_duration = calculate_shift_duration(in_time, out_time)  # Pass in_time as a string
+                out_photo_link = save_image(out_photo_bytes, user_data['code'], "out")
+                insert_attendance(user_data['code'], user_data['name'], None, None, None, out_time, out_photo_link, None, shift_duration)
+                st.success(f"Out Time and photo captured successfully! Shift duration: {shift_duration}")
 
                    
 
@@ -896,7 +918,7 @@ def generate_attendance_report(start_date, end_date):
     
     # Fetch attendance data with date filtering and text-to-date conversion in SQL query
     query = '''
-    SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
+    SELECT u.Code, u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
            a.Attendance_Date, a.Shift_Duration
     FROM Attendance a
     JOIN User_Credentials u ON a.Code = u.Code
@@ -909,21 +931,15 @@ def generate_attendance_report(start_date, end_date):
     df = pd.read_sql_query(query, conn, params=[start_date, end_date])
     conn.close()
     
-    # Display the initial data for verification
-    # Activate to test
-    # st.write("Data from query after date filtering:", df)
-    
     # Convert Attendance_Date to datetime format to enable additional filtering and calculations
     df['Attendance_Date'] = pd.to_datetime(df['Attendance_Date'], format='%d-%m-%Y', errors='coerce')
     df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'], errors='coerce')
     
     # Identify Sundays in the attendance data
     df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # Sunday = 6
-    # Activate to test
-    # st.write("Data with Is_Sunday flag:", df)
     
     # Calculate Total_Days, Sundays, and Total_Hours by grouping
-    summary = df.groupby(['Supervisor_Name', 'Technician_Name']).agg(
+    summary = df.groupby(['Supervisor_Name', 'Code', 'Technician_Name']).agg(
         Total_Days=('Attendance_Date', 'nunique'),
         Total_Hours=('Shift_Duration', 'sum'),
         Sundays=('Is_Sunday', 'sum')
@@ -932,14 +948,13 @@ def generate_attendance_report(start_date, end_date):
     # Convert total hours back to HH:MM:SS format
     summary['Total_Hours'] = summary['Total_Hours'].apply(lambda x: f"{int(x.total_seconds() // 3600):02}:{int((x.total_seconds() % 3600) // 60):02}:{int(x.total_seconds() % 60):02}")
     
-    # Display the summary results
-    # Activate to test
-    # st.write("Attendance Summary Report:", summary)
+    # Reorder columns to place Code before Technician_Name
+    summary = summary[['Supervisor_Name', 'Code', 'Technician_Name', 'Total_Days', 'Total_Hours', 'Sundays']]
     
     # Show the data in a Streamlit table format
     st.dataframe(summary)
 
-        # Provide an option to download the report as Excel
+    # Provide an option to download the report as Excel
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         summary.to_excel(writer, index=False)
@@ -972,7 +987,7 @@ def manage_super_admin_data():
     # User role and supervisor code
     user_role = st.session_state.get("user_role")  # Replace with actual session data
     supervisor_code = st.session_state.get("supervisor_code")  # Replace with actual session data
-    menu = st.sidebar.selectbox("Options", ["Download All Reports", "Sales Admin", "Attendance Management", "Advisor Admin"])
+    menu = st.sidebar.selectbox("Options", ["Download All Reports", "Sales Admin", "Attendance Management", "Advisor Admin","Enable Past Attendance"])
         
     if menu == "Download All Reports":
         if st.button("Download Reports"):
@@ -1004,6 +1019,9 @@ def manage_super_admin_data():
             advisor_admin_workshop_data(user_role, supervisor_code)
         elif sub_menu == "Advisor Report":
             advisor_admin_workshop_report(user_role, supervisor_code)
+    
+    elif menu=="Enable Past Attendance":
+        enable_past_attendance()
 
     elif menu == "Attendance Management":
 
@@ -1065,6 +1083,8 @@ def manage_Supervisor_data():
     # User role and supervisor code
     user_role = st.session_state.get("user_role")  # Replace with actual session data
     supervisor_code = st.session_state.get("supervisor_code")  # Replace with actual session data
+    user_code = st.session_state.user_data['code'] 
+    
     menu = st.sidebar.selectbox("Options", ["Sales Admin", "Attendance Management", "Advisor Admin"])
         
     if menu == "Download All Reports":
@@ -1101,7 +1121,9 @@ def manage_Supervisor_data():
     elif menu == "Attendance Management":
 
         # Tabs for User_Credentials, Attendance, and Report tables
-        tab1, tab2, tab3, tab4 = st.tabs(["User Credentials", "Attendance Data", "Attendance Report", "Mark Attendance"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["User Credentials", "Attendance Data", "Attendance Report", "Mark Attendance", "Mark Holiday"]
+        )
 
         # User Credentials Table Management
         with tab1:
@@ -1130,98 +1152,393 @@ def manage_Supervisor_data():
             with col2:
                 download_image_folder()
 
-            # Show only Attendance data where Supervisor_Name matches the logged-in user
-            conn = sqlite3.connect('Tools_And_Tools.sqlite')
-            attendance_df = pd.read_sql_query("SELECT * FROM Attendance WHERE Supervisor_Name = (SELECT Name FROM User_Credentials WHERE Code = ?)", conn, params=(user_code,))
-            conn.close()
             
-            st.dataframe(attendance_df)
+            # Get the logged-in supervisor's code
+            supervisor_code = st.session_state.user_data.get('code')
+            
+            if not supervisor_code:
+                st.error("Unable to determine Supervisor Code. Please ensure you are logged in.")
+                return
 
+            # Connect to the SQLite database
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+            # Fetch attendance data for the logged-in supervisor
+            query = '''
+            SELECT a.Code, a.Name, a.Workstation_Name, a.Attendance_Date, a.In_Time, a.In_Time_Photo_Link, a.Out_Time, a.Out_Time_Photo_Link, 
+                   a.Supervisor_Name, a.Shift_Duration, a.Holiday, a.Holiday_Remarks
+            FROM Attendance a
+            JOIN User_Credentials u ON a.Code = u.Code
+            WHERE u.Supervisor_Code = ?
+            ORDER BY a.Attendance_Date DESC
+            '''
+
+            # Load the data into a DataFrame, filtered by the supervisor code
+            attendance_df = pd.read_sql_query(query, conn, params=(supervisor_code,))
+            conn.close()
+
+            if attendance_df.empty:
+                st.write("No attendance data found for this supervisor.")
+            else:
+                st.dataframe(attendance_df)
         # Attendance Report
         with tab3:
             display_supervisor_report()
         with tab4:
             mark_attendance()
-    
+        with tab5:
+            mark_holiday()
+
+#---------------------
+
+def mark_holiday():
+    st.subheader("Mark Holiday")
+
+    # Get the logged-in supervisor's code
+    supervisor_code = st.session_state.user_data.get('code')
+    if not supervisor_code:
+        st.error("Unable to determine Supervisor Code. Please ensure you are logged in.")
+        return
+
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+
+    # Fetch unique technician names under the logged-in supervisor, sorted in ascending order
+    technicians_query = '''
+        SELECT DISTINCT u.Name AS Technician_Name, u.Code AS Technician_Code
+        FROM Attendance a
+        JOIN User_Credentials u ON a.Code = u.Code
+        WHERE u.Supervisor_Code = ? AND a.Shift_Duration IS NOT NULL
+        ORDER BY u.Name ASC
+    '''
+    technicians = pd.read_sql_query(technicians_query, conn, params=(supervisor_code,))
+    conn.close()
+
+    if technicians.empty:
+        st.write("No technicians with recorded attendance found under your supervision.")
+        return
+
+    # Select technician from dropdown (sorted in ascending order)
+    technician_name = st.selectbox("Select Technician", technicians['Technician_Name'])
+
+    if not technician_name:
+        st.warning("Please select a technician.")
+        return
+
+    # Fetch the latest 30 dates (from the current date) where Shift_Duration is not null, for the selected technician
+    technician_code = technicians.loc[technicians['Technician_Name'] == technician_name, 'Technician_Code'].iloc[0]
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+    today = datetime.now().strftime('%Y-%m-%d')
+    date_limit = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+    dates_query = '''
+        SELECT Attendance_Date
+        FROM Attendance
+        WHERE Code = ? AND Shift_Duration IS NOT NULL
+          AND DATE(substr(Attendance_Date, 7, 4) || '-' || substr(Attendance_Date, 4, 2) || '-' || substr(Attendance_Date, 1, 2))
+              BETWEEN DATE(?) AND DATE(?)
+        ORDER BY DATE(substr(Attendance_Date, 7, 4) || '-' || substr(Attendance_Date, 4, 2) || '-' || substr(Attendance_Date, 1, 2)) DESC
+    '''
+    dates = pd.read_sql_query(dates_query, conn, params=(technician_code, date_limit, today))
+    conn.close()
+
+    if dates.empty:
+        st.write(f"No valid attendance dates found for {technician_name} within the last 30 days.")
+        return
+
+    # Select date from dropdown (sorted in descending order)
+    selected_date = st.selectbox("Select Date", dates['Attendance_Date'])
+
+    # Checkbox for marking holiday
+    mark_holiday = st.checkbox("Do you want to mark this date as a Holiday?")
+
+    # Capture Holiday and Holiday_Remarks
+    if mark_holiday:
+        holiday_remarks = st.text_input("Enter Holiday Remarks")
+
+        # Ensure remarks are not blank
+        if st.button("Mark as Holiday"):
+            if not holiday_remarks.strip():
+                st.error("Holiday remarks cannot be blank.")
+                return
+
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            cursor = conn.cursor()
+
+            # Update Holiday and Holiday_Remarks
+            cursor.execute(
+                '''
+                UPDATE Attendance
+                SET Holiday = 1, Holiday_Remarks = ?
+                WHERE Code = ? AND Attendance_Date = ?
+                ''',
+                (holiday_remarks, technician_code, selected_date),
+            )
+            conn.commit()
+            conn.close()
+            st.success(f"Date {selected_date} marked as Holiday for {technician_name}.")
+    else:
+        # If unchecked, clear Holiday and Holiday_Remarks
+        if st.button("Clear Holiday Mark"):
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            cursor = conn.cursor()
+
+            # Clear Holiday and Holiday_Remarks
+            cursor.execute(
+                '''
+                UPDATE Attendance
+                SET Holiday = NULL, Holiday_Remarks = NULL
+                WHERE Code = ? AND Attendance_Date = ?
+                ''',
+                (technician_code, selected_date),
+            )
+            conn.commit()
+            conn.close()
+            st.success(f"Holiday mark cleared for {selected_date} of {technician_name}.")
+
 
 #---------------------
 def mark_attendance():
-    st.title("Attendance Management System")
+    st.subheader("Attendance Management System")
 
-    user_data = st.session_state.user_data
-        
-    if user_data['role'] == "Supervisor":  # Check if user role is Supervisor
-        st.write(f"Welcome back, {user_data['name']}")
+    # Get the logged-in user's supervisor code and name
+    supervisor_code = st.session_state.user_data.get('code')
+    logged_in_name = st.session_state.user_data.get('name')
 
-        # Fetch technicians
-        technicians = fetch_technicians(user_data['code'])
-        
-        if technicians:  # Check if technicians list is not empty
-            technician_codes = [tech[0] for tech in technicians]
-            technician_names = [tech[1] for tech in technicians]
-            
-            # Select technician
-            selected_technician = st.selectbox("Select Technician", technician_names)
+    if not supervisor_code:
+        st.error("Unable to determine Supervisor Code. Please ensure you are logged in.")
+        return
 
-            # Fetch selected technician's code
-            selected_technician_code = technician_codes[technician_names.index(selected_technician)]
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
 
-            workstations = fetch_workstations()
-            selected_workstation = st.selectbox("Select Workstation", workstations)
+    # Fetch technicians under the logged-in supervisor
+    technicians_query = '''
+        SELECT Name, Code
+        FROM User_Credentials
+        WHERE Supervisor_Code = ? AND User_Role = "Technician"
+        ORDER BY Name ASC
+    '''
+    technicians = pd.read_sql_query(technicians_query, conn, params=(supervisor_code,))
+    if technicians.empty:
+        st.write("No technicians available under your supervision.")
+        conn.close()
+        return
 
-            ist = pytz.timezone('Asia/Kolkata')
-            # Show attendance date (Indian timezone)
-            attendance_date = datetime.now(ist).strftime("%d-%m-%Y")
-            st.write(f"Attendance Date: {attendance_date}")
+    # Fetch workstations under the logged-in supervisor
+    workstations_query = '''
+        SELECT Name, Code
+        FROM User_Credentials
+        WHERE Supervisor_Code = ? AND User_Role = "Workstation"
+        ORDER BY Name ASC
+    '''
+    workstations = pd.read_sql_query(workstations_query, conn, params=(supervisor_code,))
+    conn.close()
 
-            # In time attendance capture for the technician by Supervisor
-            if not has_in_time_recorded_today(selected_technician_code):
-                if st.button("Start Shift (In Time)"):
-                    in_time = datetime.now(ist).strftime("%I.%M.%S %p")
+    # Dropdowns for Technician and Workstation
+    technician_name = st.selectbox("Select Technician", technicians['Name'])
+    workstation_name = st.selectbox("Select Workstation", workstations['Name'])
 
-                    # Fetch the supervisor name
-                    supervisor_name = fetch_supervisor_name(user_data['code'])
+    if not technician_name or not workstation_name:
+        st.warning("Please select both Technician and Workstation.")
+        return
 
-                    # Set the In_Time_Photo_Link to supervisor's name
-                    in_time_photo_link = user_data['name']  # Logged-in user's name
+    # Retrieve Past Attendance Settings
+    conn = sqlite3.connect('Tools_And_Tools.sqlite')
+    cursor = conn.cursor()
+    cursor.execute("SELECT Status, Days FROM Past_Attendance LIMIT 1")
+    settings = cursor.fetchone()
+    is_past_attendance_enabled = settings and settings[0] == "Enabled"
+    past_days_limit = settings[1] if is_past_attendance_enabled else 0
+    conn.close()
 
-                    # Insert attendance record with supervisor's name in the photo link field
-                    insert_attendance(selected_technician_code, selected_technician, selected_workstation, in_time, in_time_photo_link, None, None, supervisor_name, None)
-                    st.success("In Time captured successfully by the supervisor!")
-            else:
-                st.warning("This technician has already recorded their In Time for today!")
+    # Present Attendance Section
+    st.markdown("### Present Attendance")
 
-            # Out time attendance capture for the technician by Supervisor
-            if st.button("End Shift (Out Time)"):
-                out_time = datetime.now(ist).strftime("%I.%M.%S %p")
+    # Get the current date and time in IST
+    ist = pytz.timezone("Asia/Kolkata")
+    attendance_date = datetime.now(ist).strftime("%d-%m-%Y")
+    attendance_time = datetime.now(ist).strftime("%I:%M:%S %p")
 
-                # Fetch in_time to calculate shift duration
-                conn = sqlite3.connect('Tools_And_Tools.sqlite')
-                c = conn.cursor()
-                c.execute('SELECT In_Time FROM Attendance WHERE Code = ? AND Attendance_Date = ?', (selected_technician_code, attendance_date))
-                in_time = c.fetchone()
+    # Start Shift (In Time) Button
+    if st.button("Start Shift (In Time)"):
+        technician_code = technicians.loc[technicians['Name'] == technician_name, 'Code'].iloc[0]
+        conn = sqlite3.connect('Tools_And_Tools.sqlite')
+        cursor = conn.cursor()
+        try:
+            # Insert In Time for the current date
+            cursor.execute(
+                '''
+                INSERT INTO Attendance (Code, Name, Workstation_Name, Attendance_Date, In_Time, In_Time_Photo_Link, Supervisor_Name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(Code, Attendance_Date) DO UPDATE SET
+                In_Time = COALESCE(EXCLUDED.In_Time, In_Time),
+                In_Time_Photo_Link = COALESCE(EXCLUDED.In_Time_Photo_Link, In_Time_Photo_Link)
+                ''',
+                (technician_code, technician_name, workstation_name, attendance_date, attendance_time, logged_in_name, logged_in_name)
+            )
+            conn.commit()
+            st.success(f"Start Shift marked successfully for {technician_name} at {attendance_time}.")
+        except sqlite3.IntegrityError as e:
+            st.error(f"Error while marking In Time: {e}")
+        finally:
+            conn.close()
+
+    # End Shift (Out Time) Button
+    if st.button("End Shift (Out Time)"):
+        technician_code = technicians.loc[technicians['Name'] == technician_name, 'Code'].iloc[0]
+        conn = sqlite3.connect('Tools_And_Tools.sqlite')
+        cursor = conn.cursor()
+        try:
+            # Fetch In Time to calculate Shift Duration
+            cursor.execute(
+                '''
+                SELECT In_Time
+                FROM Attendance
+                WHERE Code = ? AND Attendance_Date = ?
+                ''',
+                (technician_code, attendance_date)
+            )
+            in_time = cursor.fetchone()
+            in_time = in_time[0] if in_time else None
+
+            # Calculate Shift Duration
+            shift_duration = None
+            if in_time:
+                in_time_obj = datetime.strptime(in_time, '%I:%M:%S %p')
+                out_time_obj = datetime.strptime(attendance_time, '%I:%M:%S %p')
+                shift_duration = str(out_time_obj - in_time_obj)
+
+            # Update Out Time and Shift Duration
+            cursor.execute(
+                '''
+                UPDATE Attendance
+                SET Out_Time = ?, Out_Time_Photo_Link = ?, Shift_Duration = ?
+                WHERE Code = ? AND Attendance_Date = ?
+                ''',
+                (attendance_time, logged_in_name, shift_duration, technician_code, attendance_date)
+            )
+            conn.commit()
+            st.success(f"End Shift marked successfully for {technician_name} at {attendance_time}.")
+        except sqlite3.IntegrityError as e:
+            st.error(f"Error while marking Out Time: {e}")
+        finally:
+            conn.close()
+
+    # Past Attendance Section (Display only if enabled)
+    if is_past_attendance_enabled:
+        st.markdown("### Mark Past Attendance")
+        past_date = st.date_input(
+            "Select Attendance Date",
+            value=datetime.now(),
+            max_value=datetime.now(),
+            min_value=datetime.now() - timedelta(days=past_days_limit)
+        ).strftime("%d-%m-%Y")
+
+        # Fetch existing record for the selected date
+        technician_code = technicians.loc[technicians['Name'] == technician_name, 'Code'].iloc[0]
+        conn = sqlite3.connect('Tools_And_Tools.sqlite')
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            SELECT In_Time, Out_Time
+            FROM Attendance
+            WHERE Code = ? AND Attendance_Date = ?
+            ''',
+            (technician_code, past_date)
+        )
+        existing_record = cursor.fetchone()
+        conn.close()
+
+        # Show existing record and update information
+        if existing_record:
+            existing_in_time, existing_out_time = existing_record
+            st.info(f"Existing Record: In Time: {existing_in_time or 'Not Set'}, Out Time: {existing_out_time or 'Not Set'}. Only missing fields will be updated.")
+
+            # Only allow editing missing fields
+            past_in_time = st.time_input("Enter In Time", value=datetime.now().time() if not existing_in_time else datetime.strptime(existing_in_time, '%I:%M:%S %p').time()).strftime("%I:%M:%S %p")
+            past_out_time = st.time_input("Enter Out Time", value=datetime.now().time() if not existing_out_time else datetime.strptime(existing_out_time, '%I:%M:%S %p').time()).strftime("%I:%M:%S %p")
+
+            updated_fields = []
+            if past_in_time != existing_in_time:
+                updated_fields.append("In Time")
+            if past_out_time != existing_out_time:
+                updated_fields.append("Out Time")
+
+        else:
+            st.info("No record found for this date.")
+            # If no data exists, Supervisor_Name will be filled with logged-in user's name
+            supervisor_name = logged_in_name
+
+            past_in_time = st.time_input("Enter In Time", value=datetime.now().time()).strftime("%I:%M:%S %p")
+            past_out_time = st.time_input("Enter Out Time", value=datetime.now().time()).strftime("%I:%M:%S %p")
+            updated_fields = ["In Time", "Out Time"]
+
+        # Submit button for past attendance
+        if st.button("Mark Past Attendance"):
+            conn = sqlite3.connect('Tools_And_Tools.sqlite')
+            cursor = conn.cursor()
+            try:
+                # Calculate Shift Duration
+                shift_duration = None
+                if past_in_time and past_out_time:
+                    in_time_obj = datetime.strptime(past_in_time, '%I:%M:%S %p')
+                    out_time_obj = datetime.strptime(past_out_time, '%I:%M:%S %p')
+                    shift_duration = str(out_time_obj - in_time_obj)
+                    # Ensure supervisor_name is defined in all cases
+                    if existing_record:
+                        supervisor_name = logged_in_name  # Use logged-in name for existing records
+                    else:
+                        supervisor_name = logged_in_name  # Use logged-in name for new records
+
+
+                # Insert or update record
+                cursor.execute(
+                    '''
+                    INSERT INTO Attendance (Code, Name, Workstation_Name, Attendance_Date, In_Time, Out_Time, Shift_Duration, In_Time_Photo_Link, Out_Time_Photo_Link, Supervisor_Name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(Code, Attendance_Date) DO UPDATE SET
+                    In_Time = COALESCE(EXCLUDED.In_Time, In_Time),
+                    Out_Time = COALESCE(EXCLUDED.Out_Time, Out_Time),
+                    Shift_Duration = COALESCE(EXCLUDED.Shift_Duration, Shift_Duration),
+                    In_Time_Photo_Link = COALESCE(EXCLUDED.In_Time_Photo_Link, In_Time_Photo_Link),
+                    Out_Time_Photo_Link = COALESCE(EXCLUDED.Out_Time_Photo_Link, Out_Time_Photo_Link)
+                    ''',
+                    (technician_code, technician_name, workstation_name, past_date, past_in_time, past_out_time, shift_duration, logged_in_name, logged_in_name, supervisor_name)
+                )
+                conn.commit()
+                st.success(f"Attendance updated successfully for {technician_name} on {past_date}. Updated fields: {', '.join(updated_fields)}")
+            except sqlite3.IntegrityError as e:
+                st.error(f"Error while marking past attendance: {e}")
+            finally:
                 conn.close()
 
-                if in_time and in_time[0]:  # Check if in_time is not None
-                    in_time = in_time[0]
+#---------------------
+def enable_past_attendance():
+    if st.session_state.user_data['name'] == "Amit":  # Only for Amit
+        st.subheader("Enable/Disable Past Attendance")
 
-                    # Fetch the supervisor name
-                    supervisor_name = fetch_supervisor_name(user_data['code'])
+        # Connect to the database and fetch existing settings
+        conn = sqlite3.connect('Tools_And_Tools.sqlite')
+        cursor = conn.cursor()
 
-                    # Set the Out_Time_Photo_Link to supervisor's name
-                    out_time_photo_link = user_data['name']  # Logged-in user's name
+        cursor.execute("SELECT Status, Days FROM Past_Attendance LIMIT 1")
+        settings = cursor.fetchone()
 
-                    # Calculate shift duration
-                    shift_duration = calculate_shift_duration(in_time, out_time)
+        # Set default values if no data exists
+        past_attendance_status = settings[0] if settings else "Disabled"
+        past_days_limit = settings[1] if settings else 0
 
-                    # Insert attendance record with supervisor's name in the photo link field
-                    insert_attendance(selected_technician_code, selected_technician, selected_workstation, None, None, out_time, out_time_photo_link, supervisor_name, shift_duration)
-                    st.success(f"Out Time captured successfully by the supervisor! Shift duration: {shift_duration}")
-                else:
-                    st.warning("No In Time recorded for this technician today.")
-      
-    else:
-        st.error("Access Denied: Only Supervisors can access this feature.")
+        # Display options to enable/disable past attendance
+        enable_past_option = st.checkbox("Enable Past Attendance Option", value=(past_attendance_status == "Enabled"))
+        past_days_input = st.number_input("Enter number of days for past attendance", min_value=0, step=1, value=past_days_limit)
+
+        if st.button("Save Settings"):
+            # Update the table with the new settings
+            cursor.execute("DELETE FROM Past_Attendance")  # Clear existing settings
+            cursor.execute("INSERT INTO Past_Attendance (Status, Days) VALUES (?, ?)", 
+                           ("Enabled" if enable_past_option else "Disabled", int(past_days_input) if enable_past_option else 0))
+            conn.commit()
+            conn.close()
+            st.success(f"Past attendance option {'enabled' if enable_past_option else 'disabled'} for {past_days_input} days.")
 
 #---------------------
 
@@ -1246,7 +1563,7 @@ def display_supervisor_report():
     else: 
         if st.button("Generate Report"): 
             user_code = st.session_state.user_data['code'] 
-            sname = fetch_name(user_code) 
+            sname = fetch_name(user_code)
             generate_sv_attendance_report(start_date.strftime("%d-%m-%Y"), end_date.strftime("%d-%m-%Y"), sname)
 
 
@@ -1276,7 +1593,7 @@ def generate_sv_attendance_report(start_date, end_date, sname):
 
     # Query with date filtering and case-insensitive supervisor name filtering
     query = '''
-    SELECT u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
+    SELECT u.Code, u.Name AS Technician_Name, u.Supervisor_Code, s.Name AS Supervisor_Name, 
            a.Attendance_Date, a.Shift_Duration
     FROM Attendance a
     JOIN User_Credentials u ON a.Code = u.Code
@@ -1290,13 +1607,6 @@ def generate_sv_attendance_report(start_date, end_date, sname):
     df = pd.read_sql_query(query, conn, params=(start_date, end_date, supervisor_name))
     conn.close()
 
-    # Debugging information
-    st.write("Attendance data for technicians under: ", supervisor_name)
-
-    # Display the initial data for verification
-    # Activate to test
-    # st.write("Filtered data from query:", df)
-
     if df.empty:
         st.warning("No attendance data found for the selected date range.")
         return
@@ -1306,8 +1616,8 @@ def generate_sv_attendance_report(start_date, end_date, sname):
     df['Shift_Duration'] = pd.to_timedelta(df['Shift_Duration'], errors='coerce')
     df['Is_Sunday'] = df['Attendance_Date'].dt.dayofweek == 6  # Sundays
 
-    # Group by supervisor and technician to get the required summary
-    summary = df.groupby(['Supervisor_Name', 'Technician_Name']).agg(
+    # Group by supervisor, code, and technician name to get the required summary
+    summary = df.groupby(['Supervisor_Name', 'Code', 'Technician_Name']).agg(
         Total_Days=('Attendance_Date', 'nunique'),
         Total_Hours=('Shift_Duration', 'sum'),
         Sundays=('Is_Sunday', 'sum')
@@ -1319,7 +1629,7 @@ def generate_sv_attendance_report(start_date, end_date, sname):
     )
 
     # Rearrange and display data
-    summary = summary[['Supervisor_Name', 'Technician_Name', 'Total_Days', 'Sundays', 'Total_Hours']]
+    summary = summary[['Supervisor_Name', 'Code', 'Technician_Name', 'Total_Days', 'Total_Hours', 'Sundays']]
     st.dataframe(summary)
 
     # Export to Excel for download
@@ -1328,7 +1638,7 @@ def generate_sv_attendance_report(start_date, end_date, sname):
         summary.to_excel(writer, index=False)
     output.seek(0)
 
-    st.download_button(label="Download Attendance Report", data=output, file_name="Attendance_Report.xlsx", mime="application/vnd.ms-excel")
+    st.download_button(label="Download Attendance Report", data=output, file_name="Supervisor_Attendance_Report.xlsx", mime="application/vnd.ms-excel")
 
 #=================================================================
 # Function to download data as Excel

@@ -32,7 +32,8 @@ def styled_number_input(label, value, key):
     )
 
 def daily_workstation_data_entry(workstation_name, supervisor_name):
-    st.title("Daily Workstation Data Entry")
+    st.markdown('''###    :green[Daily Workstation Data Entry]''')
+    # st.title("Daily Workstation Data Entry")
 
     initialize_session()
 
@@ -152,6 +153,8 @@ def daily_workstation_data_entry(workstation_name, supervisor_name):
     #==================================================
     #Main Page
 def workstation_interface(user_workstation_id):
+    user_data = st.session_state.user_data
+    st.success(f"Welcome to {user_data['name']}")
     st.title("Workstation Dashboard")
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -185,6 +188,7 @@ def workstation_interface(user_workstation_id):
 
 def daily_advisor_data_entry(user_workstation_id,supervisor_name):
     
+    st.markdown('''###    :blue[Daily Advisor Data Entry]''')
     with get_db_connection() as conn:
         cursor = conn.cursor()
     # Retrieve Advisor names under the current Workstation
@@ -295,7 +299,9 @@ def daily_advisor_data_entry(user_workstation_id,supervisor_name):
 
 # Main function to run the dashboard
 def main():
+    
     st.set_page_config(page_title="Workstation Dashboard", layout="wide")
+    
     st.sidebar.title("Options")
     option = st.sidebar.radio("Choose an Action", ["Daily Workstation Data Entry"])
 
